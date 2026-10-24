@@ -1,10 +1,161 @@
-<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BAT LAB v0.9.1｜スマホカメラ</title><style>*{box-sizing:border-box}body{margin:0;background:#081a2b;color:#eaf8ff;font:14px system-ui}main{max-width:760px;margin:auto;padding:12px}h2{font-size:18px;margin:6px 0 12px}button{background:#126d96;border:1px solid #92d6e8;border-radius:8px;color:white;padding:11px;margin:3px}textarea{width:100%;height:70px;background:#122f43;color:white;border:1px solid #658da0;border-radius:7px;font:11px monospace}video{width:100%;max-height:35vh;object-fit:contain;background:black;border-radius:10px}section{border:1px solid #54778c;border-radius:9px;padding:10px;margin:8px 0}.small{font-size:12px;color:#b6d3df}#log{font:11px monospace;white-space:pre-wrap;max-height:110px;overflow:auto}</style></head><body><main><h2>BAT LAB v0.9.1｜スマホ外部カメラ</h2><section><b>v0.9.1 自動接続</b><div id="easy-state">QRから開くと自動接続します</div><button id="easy-retry">再接続</button><p class="small">タブレットのQRから開き、スマホ側で「カメラ起動」を押してください。HTTPS・カメラ権限・インターネットが必要です。映像は送信せず検出情報のみ送ります。時刻精度は未検証です。</p></section><section><b>① タブレットの接続コードを貼り付け</b><textarea id="offer" placeholder="タブレットの接続コード"></textarea><button id="create">② 応答コードを生成</button><p class="small">生成後、下のコードをコピーしてタブレット側に貼り付けます。</p><textarea id="answer" readonly placeholder="スマホの応答コード"></textarea><button id="copy">応答コードをコピー</button><div id="state">未接続</div></section><section><b>③ スマホカメラ</b><div><button id="camera">カメラ起動</button><button id="stop">カメラ停止</button><button id="manual">検出テスト送信</button></div><video id="preview" autoplay muted playsinline></video><p class="small">動き検出は試験用のフレーム差分方式です。バットのインパクト時刻を確定するものではありません。</p><label><input id="detect" type="checkbox" checked> 動きの変化を検出して送信（暫定）</label><div id="metrics" class="small">カメラ停止中</div></section><section><b>タブレットの計測状態：</b><span id="trial">待機中</span></section><section><b>通信イベント（時刻精度未検証）</b><div id="log">イベント待機中</div></section></main><script>(()=>{'use strict';const $=id=>document.getElementById(id);let pitchId070=null,cameraToken070=0,cameraBusy070=false;let pc=null,dc=null,stream=null,raf=null,prev=null,lastMotion=0,frameCount=0,lastFps=performance.now(),fps=0;const cv=document.createElement('canvas');cv.width=64;cv.height=48;const ctx=cv.getContext('2d',{willReadFrequently:true});function log(s){$('log').textContent=new Date().toLocaleTimeString()+' '+s+'\n'+$('log').textContent.slice(0,1200)}function send(o){if(o.type==='camera'){o.pitchId=pitchId070;o.source='phoneCamera';o.sourceTimestamp=o.mono;o.swingSpeed=null;o.motionFeatures=o.motionFeatures??null;}if(dc?.readyState==='open')dc.send(JSON.stringify(o))}function attach(ch){dc=ch;dc.onopen=()=>{$('state').textContent='接続成功';log('接続成功・時刻精度未検証');send({type:'hello',role:'phone',version:'0.9.1',camera:'frame-difference experimental'});send({type:'camera-status',state:stream?'waiting':'stopped',message:stream?'映像取得・検出待機':'スマホカメラ未起動',mono:performance.now()})};dc.onclose=()=>{pitchId070=null;$('state').textContent='切断';log('切断')};dc.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch{return}if(m.type==='ping'){const t1=performance.now();const t2=performance.now();send({type:'pong',id:m.id,t0:m.t0,t1,t2})}else if(m.type==='pitch'){pitchId070=m.kind==='start'?m.pitchId:null;$('trial').textContent=m.kind==='start'?'投球受付中：'+m.pitchId:'待機中';log('投球 '+m.kind)}else if(m.type==='marker'){log('タブレット計測 '+m.kind);$('trial').textContent=m.kind==='start'?'計測中':'停止中'}}}window.BAT52_attach=attach;window.BAT52_log=log;async function waitIce(p){if(p.iceGatheringState==='complete')return;await new Promise(resolve=>{const t=setTimeout(resolve,12000);p.addEventListener('icegatheringstatechange',function f(){if(p.iceGatheringState==='complete'){clearTimeout(t);p.removeEventListener('icegatheringstatechange',f);resolve()}})})}$('create').onclick=async()=>{try{pc?.close();pc=new RTCPeerConnection({iceServers:[]});pc.ondatachannel=e=>attach(e.channel);pc.onconnectionstatechange=()=>{$('state').textContent='接続：'+pc.connectionState};await pc.setRemoteDescription(JSON.parse($('offer').value));await pc.setLocalDescription(await pc.createAnswer());await waitIce(pc);$('answer').value=JSON.stringify(pc.localDescription);log('応答コード生成完了')}catch(e){alert('生成失敗：'+e.message)}};$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('answer').value);alert('コピーしました')}catch(e){$('answer').select();alert('手動でコピーしてください')}};function analyze(t){if(!stream)return;if($('preview').readyState<2){raf=setTimeout(analyze,70);return;}ctx.drawImage($('preview'),0,0,64,48);const data=ctx.getImageData(0,0,64,48).data;let now=performance.now();frameCount++;if(now-lastFps>=1000){fps=frameCount*1000/(now-lastFps);frameCount=0;lastFps=now;$('metrics').textContent='解析FPS：'+fps.toFixed(1)+' / 通信：'+(dc?.readyState||'未接続')}if(prev){let diff=0;for(let i=0;i<data.length;i+=16)diff+=Math.abs(data[i]-prev[i]);diff/=data.length/16;if(diff>18&&now-lastMotion>450&&$('detect').checked){lastMotion=now;send({type:'camera',mono:now,kind:'frame-motion',confidence:Math.min(1,diff/80),fps:Number(fps.toFixed(1)),motionFeatures:{frameDifference:diff,method:'frame-difference',threshold:18}});log('映像変化 '+diff.toFixed(1)+'（インパクト判定ではありません）')}}prev=new Uint8ClampedArray(data);raf=setTimeout(analyze,70)}function stopCamera070(reason='手動停止'){cameraToken070++;stream?.getTracks().forEach(x=>x.stop());stream=null;clearTimeout(raf);raf=null;$('preview').srcObject=null;prev=null;$('metrics').textContent='カメラ停止中';send({type:'camera-status',state:'stopped',message:'スマホカメラ停止',mono:performance.now()});log(reason)}
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BAT LAB v0.9.2｜スマホカメラ</title><style>*{box-sizing:border-box}body{margin:0;background:#081a2b;color:#eaf8ff;font:14px system-ui}main{max-width:760px;margin:auto;padding:12px}h2{font-size:18px;margin:6px 0 12px}button{background:#126d96;border:1px solid #92d6e8;border-radius:8px;color:white;padding:11px;margin:3px}textarea{width:100%;height:70px;background:#122f43;color:white;border:1px solid #658da0;border-radius:7px;font:11px monospace}video{width:100%;max-height:35vh;object-fit:contain;background:black;border-radius:10px}section{border:1px solid #54778c;border-radius:9px;padding:10px;margin:8px 0}.small{font-size:12px;color:#b6d3df}#log{font:11px monospace;white-space:pre-wrap;max-height:110px;overflow:auto}</style></head><body><main><h2>BAT LAB v0.9.2｜スマホ外部カメラ</h2><section><b>v0.9.2 自動接続</b><div id="easy-state">QRから開くと自動接続します</div><button id="easy-retry">再接続</button><p class="small">タブレットのQRから開き、スマホ側で「カメラ起動」を押してください。HTTPS・カメラ権限・インターネットが必要です。映像は送信せず検出情報のみ送ります。時刻精度は未検証です。</p></section><section><b>① タブレットの接続コードを貼り付け</b><textarea id="offer" placeholder="タブレットの接続コード"></textarea><button id="create">② 応答コードを生成</button><p class="small">生成後、下のコードをコピーしてタブレット側に貼り付けます。</p><textarea id="answer" readonly placeholder="スマホの応答コード"></textarea><button id="copy">応答コードをコピー</button><div id="state">未接続</div></section><section><b>③ スマホカメラ</b><div><button id="camera">カメラ起動</button><button id="stop">カメラ停止</button><button id="manual">検出テスト送信</button></div><video id="preview" autoplay muted playsinline></video><p class="small">バット候補と身体姿勢から軌道を推定します。映像は送信せず特徴情報だけを送信します。姿勢解析の初回準備にはインターネットを使用します。</p><label><input id="detect" type="checkbox" checked> 動きの変化を検出して送信（暫定）</label><label>打球が進む画面方向 <select id="side-forward"><option value="left">左方向</option><option value="right">右方向</option></select></label><div id="metrics" class="small">カメラ停止中</div><div id="vision-metrics" class="small">解析：停止</div></section><section><b>タブレットの計測状態：</b><span id="trial">待機中</span></section><section><b>通信イベント（時刻精度未検証）</b><div id="log">イベント待機中</div></section></main><script id="bat92-vision">
+/* Camera-local image features and optional on-device pose estimation. No video is transmitted. */
+(() => {
+ 'use strict';
+ const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),finite=v=>typeof v==='number'&&Number.isFinite(v),clone=x=>JSON.parse(JSON.stringify(x));
+ const MODEL='https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+ const MODULE='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/vision_bundle.mjs',WASM='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm';
+ function slope(points,key){
+  const valid=points.filter(p=>finite(p[key]));if(valid.length<3)return null;
+  const t=valid.reduce((n,p)=>n+p.at,0)/valid.length,y=valid.reduce((n,p)=>n+p[key],0)/valid.length;
+  let n=0,d=0;for(const p of valid){n+=(p.at-t)*(p[key]-y);d+=(p.at-t)**2;}return d>1?n/d*1000:null;
+ }
+ function summarize(samples,at,role='front',forward='left'){
+  const near=samples.filter(p=>Math.abs(p.at-at)<=130),bat=near.filter(p=>p.batConfidence>=.3),pose=near.filter(p=>p.poseConfidence>=.4);
+  const use=bat.length>=3?bat:pose,method=bat.length>=3?'motion-line-candidate':pose.length>=3?'pose-hands':'assumed';
+  const vx=slope(use,method==='pose-hands'?'handX':'batX'),vy=slope(use,method==='pose-hands'?'handY':'batY');
+  const strength=vx===null||vy===null?0:Math.hypot(vx,vy),toward=role!=='side'||vx===null?1:(forward==='left'?-vx:vx)>0?1:.15;
+  const confidence=method==='assumed'?0:clamp(use.reduce((n,p)=>n+(method==='pose-hands'?p.poseConfidence:p.batConfidence),0)/use.length*Math.min(1,strength/.25)*toward,0,.85);
+  const aspect=near.find(p=>finite(p.aspect))?.aspect||4/3;
+  let attack=role==='side'&&confidence>.18?clamp(Math.atan2(-vy,Math.abs(vx)*aspect+.03)*180/Math.PI,-35,60):null;
+  const hx=slope(pose,'handX'),hy=slope(pose,'handY'),handAttack=role==='side'&&hx!==null&&hy!==null?clamp(Math.atan2(-hy,Math.abs(hx)*aspect+.03)*180/Math.PI,-35,60):null;
+  if(method==='motion-line-candidate'&&attack!==null&&handAttack!==null&&pose.length>=3)attack=.85*attack+.15*handAttack;
+  const closest=near.slice().sort((a,b)=>Math.abs(a.at-at)-Math.abs(b.at-at))[0];
+  const line=bat.length?bat.reduce((n,p)=>n+p.batAngleDeg,0)/bat.length:null;
+  return {role,at,method,confidence,sampleCount:use.length,nearestMs:closest?Math.abs(closest.at-at):null,
+   attackDeg:attack,horizontalProxyDeg:role==='front'&&vx!==null?clamp(vx*9,-12,12):null,
+   velocityImage:{xPerSec:vx,yPerSec:vy,forward},handAttackDeg:handAttack,batAngleImageDeg:line,body:closest?.body||null,
+   basis:'image-feature-estimate; camera projection and virtual contact assumptions; not measured millimetres'};
+ }
+ class Engine {
+  constructor(video,{role='front',forward='left',onFeatures=()=>{},onMotion=()=>{},onStatus=()=>{}}={}){
+   this.video=video;this.role=role;this.forward=forward;this.onFeatures=onFeatures;this.onMotion=onMotion;this.onStatus=onStatus;
+   this.cv=document.createElement('canvas');this.cv.width=224;this.cv.height=168;this.ctx=this.cv.getContext('2d',{willReadFrequently:true});
+   this.history=[];this.running=false;this.poseState='idle';this.pose=null;this.frameCount=0;this.lastAt=-1;this.lastPoseAt=0;this.lastMotion=-1e6;this.motionRun=[];this.baseline=null;this.generation=0;
+  }
+  start(){if(this.running)return;this.running=true;this.generation++;this.onStatus({state:'tracking',pose:this.poseState});this.startPose();this.schedule();}
+  stop(){this.running=false;this.generation++;clearTimeout(this.timer);if(this.callback&&this.video.cancelVideoFrameCallback)this.video.cancelVideoFrameCallback(this.callback);this.worker?.terminate();this.worker=null;this.poseState='stopped';this.pose=null;this.poseBusy=false;this.prev=null;this.history=[];this.motionRun=[];this.onStatus({state:'stopped',pose:this.poseState});}
+  calibrate(){this.baseline=this.pose?clone(this.pose):null;this.history=[];this.prev=null;this.onStatus({state:'calibrated',pose:this.poseState});return {pose:!!this.baseline,at:performance.now()};}
+  async startPose(){
+   if(this.worker||!window.Worker||!window.createImageBitmap){this.poseState='unavailable';return;}
+   this.poseState='loading';this.onStatus({state:'tracking',pose:this.poseState});
+   const code=`let model=null;self.onmessage=async e=>{const m=e.data;if(m.type==='init'){try{const v=await import(${JSON.stringify(MODULE)});const files=await v.FilesetResolver.forVisionTasks(${JSON.stringify(WASM)});model=await v.PoseLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:${JSON.stringify(MODEL)},delegate:'CPU'},runningMode:'VIDEO',numPoses:1,minPoseDetectionConfidence:.45,minPosePresenceConfidence:.45,minTrackingConfidence:.45});postMessage({type:'ready'});}catch(error){postMessage({type:'error',message:error.message});}}else if(m.type==='frame'){try{if(model){const r=model.detectForVideo(m.image,m.at);postMessage({type:'pose',at:m.at,landmarks:r.landmarks?.[0]||null,world:r.worldLandmarks?.[0]||null});}}catch(error){postMessage({type:'error',message:error.message});}finally{m.image.close();postMessage({type:'frame-done'});}}};`;
+   const blob=new Blob([code],{type:'application/javascript'}),url=URL.createObjectURL(blob);
+   try{
+    // A classic worker permits the pinned MediaPipe WASM loader's importScripts().
+    this.worker=new Worker(url);URL.revokeObjectURL(url);
+    this.poseTimeout=setTimeout(()=>{if(this.poseState==='loading'){this.poseState='unavailable';this.worker?.terminate();this.worker=null;this.onStatus({state:'tracking',pose:this.poseState});}},18000);
+    this.worker.onmessage=e=>{
+     if(!this.running)return;const m=e.data;
+     if(m.type==='ready'){clearTimeout(this.poseTimeout);this.poseState='ready';this.onStatus({state:'tracking',pose:this.poseState});}
+     if(m.type==='frame-done')this.poseBusy=false;
+     if(m.type==='error'){clearTimeout(this.poseTimeout);this.poseState='unavailable';this.poseBusy=false;this.worker?.terminate();this.worker=null;this.onStatus({state:'tracking',pose:this.poseState,error:m.message});}
+     if(m.type==='pose'){
+      const l=m.landmarks;if(!l||[11,12,15,16,23,24].some(i=>!l[i])){this.pose=null;return;}
+      const ids=[11,12,15,16,23,24],confidence=Math.min(...ids.map(i=>l[i].visibility??.5)),mean=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:(a.z+b.z)/2});
+      const hands=mean(l[15],l[16]),hips=mean(l[23],l[24]);
+      this.pose={at:m.at,confidence,handX:hands.x,handY:hands.y,body:{shoulderTiltDeg:Math.atan2(l[12].y-l[11].y,Math.abs(l[12].x-l[11].x)+.001)*180/Math.PI,hipX:hips.x,hipY:hips.y,handHeightImage:hips.y-hands.y,worldHands:m.world?mean(m.world[15],m.world[16]):null}};
+     }
+    };
+    this.worker.onerror=()=>{clearTimeout(this.poseTimeout);this.poseState='unavailable';this.poseBusy=false;this.worker?.terminate();this.worker=null;this.onStatus({state:'tracking',pose:this.poseState});};
+    this.worker.postMessage({type:'init'});
+   }catch(e){URL.revokeObjectURL(url);this.worker=null;this.poseState='unavailable';this.onStatus({state:'tracking',pose:this.poseState,error:e.message});}
+  }
+  schedule(){
+   if(!this.running)return;
+   if(this.video.requestVideoFrameCallback)this.callback=this.video.requestVideoFrameCallback((now,meta)=>{this.analyze(now,meta);this.schedule()});
+   else this.timer=setTimeout(()=>{this.analyze(performance.now(),null);this.schedule()},34);
+  }
+  analyze(now,metadata){
+   if(!this.running||this.video.readyState<2||now-this.lastAt<25)return;this.lastAt=now;
+   const at=metadata?.captureTime&&Number.isFinite(metadata.captureTime)&&Math.abs(now-metadata.captureTime)<1000?metadata.captureTime:now;
+   try{this.ctx.drawImage(this.video,0,0,224,168);this.process(this.ctx.getImageData(0,0,224,168).data,at);}catch{return;}
+   if(this.poseState==='ready'&&!this.poseBusy&&now-this.lastPoseAt>100){
+    this.poseBusy=true;this.lastPoseAt=now;const generation=this.generation;
+    createImageBitmap(this.video,{resizeWidth:320,resizeHeight:240}).then(image=>{if(!this.running||generation!==this.generation||!this.worker){image.close();this.poseBusy=false;return;}this.worker.postMessage({type:'frame',image,at},[image]);}).catch(()=>{this.poseBusy=false});
+   }
+  }
+  process(rgba,at){
+   const w=224,h=168,gray=new Uint8Array(w*h);let mean=0;
+   for(let i=0;i<gray.length;i++){gray[i]=(rgba[i*4]+2*rgba[i*4+1]+rgba[i*4+2])/4;mean+=gray[i];}mean/=gray.length;
+   if(!this.prev){this.prev=gray;this.prevMean=mean;return;}
+   const shift=mean-this.prevMean,pts=[];let motion=0,n=0;
+   for(let y=14;y<h-10;y+=2)for(let x=10;x<w-10;x+=2){const i=y*w+x,d=Math.abs(gray[i]-this.prev[i]-shift);motion+=d;n++;if(d>19&&(Math.abs(gray[i+1]-gray[i-1])+Math.abs(gray[i+w]-gray[i-w]))>48)pts.push([x,y]);}
+   motion/=n;this.prev=gray;this.prevMean=mean;this.frameCount++;
+   // A moving elongated edge is a BAT CANDIDATE, not a semantic bat identification.
+   const points=pts.filter((_,i)=>i%Math.max(1,Math.ceil(pts.length/180))===0);
+   let best=null;
+   if(points.length>=8)for(let angle=0;angle<180;angle+=10){
+    const c=Math.cos(angle*Math.PI/180),s=Math.sin(angle*Math.PI/180),bins=new Map();
+    for(const p of points){const b=Math.round((p[0]*-s+p[1]*c)/3);if(!bins.has(b))bins.set(b,[]);bins.get(b).push(p);}
+    for(const [b,list] of bins){if(list.length<7)continue;const proj=list.map(p=>p[0]*c+p[1]*s),lo=Math.min(...proj),hi=Math.max(...proj),length=hi-lo;if(length<32||length>190)continue;
+     const cx=(lo+hi)/2*c-b*3*s,cy=(lo+hi)/2*s+b*3*c;
+     const hand=this.pose&&this.pose.confidence>=.4&&at-this.pose.at<300?this.pose:null,handDistance=hand?Math.hypot(cx/w-hand.handX,cy/h-hand.handY):.25;
+     const score=list.length*Math.min(2,length/55)*(handDistance<.45?1:.5)*(Math.abs(s)>.96?.65:1);
+     if(!best||score>best.score)best={score,x:cx/w,y:cy/h,angle:angle>90?angle-180:angle,length:length/w,confidence:clamp(list.length/28,0,.82)*(hand?(handDistance<.45?1:.25):.65)};
+    }
+   }
+   const p=this.pose&&at-this.pose.at<350?this.pose:null;
+   const sample={at,aspect:this.video.videoWidth&&this.video.videoHeight?this.video.videoWidth/this.video.videoHeight:4/3,batConfidence:best?.confidence||0,batX:best?.x??null,batY:best?.y??null,batAngleDeg:best?.angle??null,batLengthImage:best?.length??null,poseConfidence:p?.confidence||0,handX:p?.handX??null,handY:p?.handY??null,body:p?.body||null,motion};
+   this.history.push(sample);while(this.history.length&&at-this.history[0].at>8000)this.history.shift();
+   this.onFeatures(sample);
+   if(motion>6.5&&at-this.lastMotion>650){this.motionRun.push(sample);if(this.motionRun.length>18||this.motionRun.length>=3&&motion<this.motionRun.at(-2).motion*.72){const peak=this.motionRun.reduce((a,b)=>a.motion>b.motion?a:b);this.lastMotion=at;this.motionRun=[];this.onMotion({at:peak.at,confidence:clamp(peak.motion/35,.15,.85),features:this.featuresAt(peak.at)});}}
+   else if(motion<4&&this.motionRun.length){if(this.motionRun.length>=2&&at-this.lastMotion>650){const peak=this.motionRun.reduce((a,b)=>a.motion>b.motion?a:b);this.lastMotion=at;this.onMotion({at:peak.at,confidence:clamp(peak.motion/35,.15,.85),features:this.featuresAt(peak.at)});}this.motionRun=[];}
+  }
+  featuresAt(at){return summarize(this.history,at,this.role,this.forward);}
+  getState(){return {running:this.running,pose:this.poseState,frames:this.frameCount,samples:this.history.length,role:this.role};}
+ }
+ const remote=[],state={pitchId:null,received:0,rejected:0,lastAt:null,clock:null},engines={};
+ function setPitch(id){state.pitchId=id;remote.length=0;}
+ function ingest(packet){
+  if(!packet||packet.pitchId!==state.pitchId||!Array.isArray(packet.samples)||packet.samples.length>40||!finite(packet.offsetMs)||!finite(packet.rttMs)||packet.rttMs>120||packet.rttMs<0||packet.clockAgeMs>15000){state.rejected++;return false;}
+  const now=performance.now();
+  for(const raw of packet.samples){
+   if(!finite(raw.at))continue;const at=raw.at-packet.offsetMs;if(at>now+80||at<now-8000)continue;
+   const s={at,batConfidence:clamp(Number(raw.batConfidence)||0,0,1),poseConfidence:clamp(Number(raw.poseConfidence)||0,0,1)};
+   for(const k of ['batX','batY','batAngleDeg','batLengthImage','handX','handY','motion','aspect'])s[k]=finite(raw[k])?raw[k]:null;
+   s.body=raw.body&&typeof raw.body==='object'?clone(raw.body):null;
+   if(!remote.some(p=>Math.abs(p.at-at)<.1))remote.push(s);
+  }
+  remote.sort((a,b)=>a.at-b.at);while(remote.length>300)remote.shift();state.received++;state.lastAt=now;state.clock={offsetMs:packet.offsetMs,rttMs:packet.rttMs,ageMs:packet.clockAgeMs};return true;
+ }
+ function estimate(at,{source='tabletCamera',mode='both',hand='right',defaultAttack=12,defaultLaunch=24,sideForward='left'}={}){
+  const front=mode!=='phoneCamera'?engines.tablet?.featuresAt(at)||null:null;
+  const side=mode!=='tabletCamera'?summarize(remote,at,'side',sideForward):null;
+  const sideValid=side&&side.confidence>=.22&&side.sampleCount>=3,frontValid=front&&front.confidence>=.22&&front.sampleCount>=3;
+  const attack=sideValid?side.attackDeg:clamp(defaultAttack,-30,50);
+  const launch=sideValid?clamp(attack*.8+10,-12,68):clamp(defaultLaunch,-12,68);
+  const directionAdjustment=frontValid?front.horizontalProxyDeg*(hand==='right'?1:-1)*.45:0;
+  return {at,attackDeg:attack,launchDeg:launch,directionAdjustmentDeg:directionAdjustment,
+   confidence:sideValid&&frontValid?Math.min(front.confidence,side.confidence):sideValid?side.confidence*.8:frontValid?front.confidence*.55:0,
+   usedSources:[...(frontValid?['front']:[]),...(sideValid?['side']:[])],front,side,clock:state.clock,
+   assumptions:{sweetSpot:true,launchFromAttack:'0.8 * side attack + 10 degrees; assumed mapping',defaultAttackDeg:defaultAttack,defaultLaunchDeg:defaultLaunch,projection:'fixed front/side camera; image features, no metric stereo reconstruction',spin:'collision-model estimate'},
+   status:sideValid&&frontValid?'two-camera-estimate':sideValid?'side-camera-estimate':frontValid?'front-camera-with-assumed-launch':'assumed-launch'};
+ }
+ window.BATLAB_VISION092=Object.freeze({Engine,summarize,engines,setPitch,ingest,estimate,getState:()=>({...state,remoteSamples:remote.length,tablet:engines.tablet?.getState()||null}),urls:{model:MODEL,module:MODULE,wasm:WASM}});
+})();
+
+</script><script>(()=>{'use strict';const $=id=>document.getElementById(id);let pitchId070=null,cameraToken070=0,cameraBusy070=false;let pc=null,dc=null,stream=null,raf=null,prev=null,lastMotion=0,frameCount=0,lastFps=performance.now(),fps=0;const cv=document.createElement('canvas');cv.width=64;cv.height=48;const ctx=cv.getContext('2d',{willReadFrequently:true});function log(s){$('log').textContent=new Date().toLocaleTimeString()+' '+s+'\n'+$('log').textContent.slice(0,1200)}function send(o){if(o.type==='camera'){o.pitchId=pitchId070;o.protocolVersion=2;o.source='phoneCamera';o.sourceTimestamp=o.mono;o.swingSpeed=null;o.motionFeatures=o.motionFeatures??null;}if(dc?.readyState==='open')dc.send(JSON.stringify(o))}function attach(ch){dc=ch;dc.onopen=()=>{$('state').textContent='接続成功';log('接続成功・時刻精度未検証');send({type:'hello',role:'phone',version:'0.9.2',protocolVersion:2,camera:'image-features + optional local pose'});send({type:'camera-status',state:stream?'waiting':'stopped',message:stream?'映像取得・検出待機':'スマホカメラ未起動',mono:performance.now()})};dc.onclose=()=>{pitchId070=null;$('state').textContent='切断';log('切断')};dc.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch{return}if(m.type==='ping'){const t1=performance.now();const t2=performance.now();send({type:'pong',id:m.id,t0:m.t0,t1,t2})}else if(m.type==='pitch'){pitchId070=m.kind==='start'?m.pitchId:null;featureBuffer=[];if(m.vision?.sideForward){$('side-forward').value=m.vision.sideForward;if(vision)vision.forward=m.vision.sideForward;}$('trial').textContent=m.kind==='start'?'投球受付中：'+m.pitchId:'待機中';log('投球 '+m.kind)}else if(m.type==='marker'){log('タブレット計測 '+m.kind);$('trial').textContent=m.kind==='start'?'計測中':'停止中'}}}window.BAT52_attach=attach;window.BAT52_log=log;async function waitIce(p){if(p.iceGatheringState==='complete')return;await new Promise(resolve=>{const t=setTimeout(resolve,12000);p.addEventListener('icegatheringstatechange',function f(){if(p.iceGatheringState==='complete'){clearTimeout(t);p.removeEventListener('icegatheringstatechange',f);resolve()}})})}$('create').onclick=async()=>{try{pc?.close();pc=new RTCPeerConnection({iceServers:[]});pc.ondatachannel=e=>attach(e.channel);pc.onconnectionstatechange=()=>{$('state').textContent='接続：'+pc.connectionState};await pc.setRemoteDescription(JSON.parse($('offer').value));await pc.setLocalDescription(await pc.createAnswer());await waitIce(pc);$('answer').value=JSON.stringify(pc.localDescription);log('応答コード生成完了')}catch(e){alert('生成失敗：'+e.message)}};$('copy').onclick=async()=>{try{await navigator.clipboard.writeText($('answer').value);alert('コピーしました')}catch(e){$('answer').select();alert('手動でコピーしてください')}};let vision=null,featureBuffer=[],lastFeatureSend=0,featureSequence=0;
+function analyze(){
+ vision?.stop();vision=new window.BATLAB_VISION092.Engine($('preview'),{role:'side',forward:$('side-forward').value,
+  onStatus:s=>{$('vision-metrics').textContent=s.pose==='ready'?'解析：バット候補＋身体姿勢':s.pose==='loading'?'解析：画像特徴を取得・姿勢を準備中':s.state==='stopped'?'解析：停止':'解析：画像特徴（身体姿勢は未取得）';},
+  onFeatures:sample=>{
+   featureBuffer.push(sample);while(featureBuffer.length>24)featureBuffer.shift();
+   if(featureBuffer.length>3){const f=featureBuffer;fps=(f.length-1)*1000/(f.at(-1).at-f[0].at||1);}
+   $('metrics').textContent='解析 '+fps.toFixed(1)+'fps / 通信 '+(dc?.readyState||'未接続');
+   if(pitchId070&&dc?.readyState==='open'&&sample.at-lastFeatureSend>100){lastFeatureSend=sample.at;send({type:'swing-features',pitchId:pitchId070,protocolVersion:2,sequence:++featureSequence,samples:featureBuffer.slice(-12)});}
+  },
+  onMotion:e=>{if(pitchId070&&$('detect').checked)send({type:'camera',mono:e.at,kind:'camera-feature-peak',confidence:e.confidence,fps:Number(fps.toFixed(1)),motionFeatures:{vision:e.features,method:'camera-features'}});}
+ });window.BATLAB_VISION092.engines.phone=vision;vision.start();
+}
+$('side-forward').onchange=()=>{if(vision)vision.forward=$('side-forward').value;};
+function stopCamera070(reason='手動停止'){cameraToken070++;vision?.stop();featureBuffer=[];stream?.getTracks().forEach(x=>x.stop());stream=null;clearTimeout(raf);raf=null;$('preview').srcObject=null;prev=null;$('metrics').textContent='カメラ停止中';send({type:'camera-status',state:'stopped',message:'スマホカメラ停止',mono:performance.now()});log(reason)}
 $('camera').onclick=async()=>{
  if(stream||cameraBusy070)return;cameraBusy070=true;const token=++cameraToken070;
  send({type:'camera-status',state:'permission',message:'スマホでカメラ権限を確認中',mono:performance.now()});
  try{
   if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia)throw Error('HTTPSまたはlocalhostで開いてください');
-  const acquired=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:640},height:{ideal:480},frameRate:{ideal:60}},audio:false});
+  const acquired=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment',width:{ideal:1280},height:{ideal:720},frameRate:{ideal:60}},audio:false});
   if(token!==cameraToken070){acquired.getTracks().forEach(t=>t.stop());return;}
   stream=acquired;$('preview').srcObject=stream;await $('preview').play();prev=null;lastMotion=0;analyze();
   send({type:'camera-status',state:'waiting',message:'映像取得・検出待機（精度未検証）',mono:performance.now()});log('カメラ起動・検出待機');
